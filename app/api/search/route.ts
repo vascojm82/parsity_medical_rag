@@ -8,7 +8,7 @@ import { NextResponse } from 'next/server';
  */
 export async function POST(request: Request) {
 	const query = await request.json(); // which patient is at risk of diabetes?
-	const results = await searchClinicalNotes(query, { topK: 10 });
+	const results = await searchClinicalNotes(query, null, { topK: 10 });
 
 	return NextResponse.json(results);
 }

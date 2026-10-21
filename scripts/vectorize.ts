@@ -71,7 +71,7 @@ async function main() {
 		const notes = await readPage(cursor, take);
 		if (notes.length === 0) break;
 
-		const chunks: MedicalChunk[] = notes.map((note) => ({
+		const chunks: MedicalChunk[] = notes.map((note: any) => ({
 			id: note.id,
 			content: note.content, // the only part that gets embedded
 			metadata: {

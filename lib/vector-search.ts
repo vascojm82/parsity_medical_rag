@@ -18,8 +18,31 @@ export type VectorSearchOptions = {
 	topN?: number; // candidates kept after reranking
 };
 
+export type PineconeFilter = Record<string, Record<string, unknown>>;
+
+// Converts selector filter output to something Pinecone will accept
+export function toPineconeFilter(f: any): PineconeFilter | undefined  {
+  const clauses = [];
+  if (f.dob) 			  clauses.push({ dob: { $eq: f.dob } });
+  if (f.gender)           clauses.push({ gender: { $eq: f.gender } });
+  if (f.minAge !== null)  clauses.push({ age: { $gte: f.minAge } });
+  if (f.maxAge !== null)  clauses.push({ age: { $lte: f.maxAge } });
+  if (f.isAlive !== null) clauses.push({ isAlive: { $eq: f.isAlive } });
+  if (f.race)             clauses.push({ race: { $eq: f.race } });
+  if (f.ethnicity)        clauses.push({ ethnicity: { $eq: f.ethnicity } });
+
+  // merge clauses into one flat object; same-field ops combine, e.g. age: { $gte: 50, $lte: 60 }
+  const filter = clauses.reduce<Record<string, Record<string, unknown>>>((acc, clause) => {
+    for (const [field, ops] of Object.entries(clause)) acc[field] = { ...acc[field], ...ops };
+    return acc;
+  }, {});
+
+  return clauses.length ? filter : undefined;
+}
+
 export async function searchClinicalNotes(
 	query: string,
+	filter?: PineconeFilter,
 	options: VectorSearchOptions = {},
 ): Promise<string> {
 	// query -> string[]
@@ -29,6 +52,7 @@ export async function searchClinicalNotes(
 		vector: embedding, //query represented as 1536 vector
 		topK: 10,
 		includeMetadata: true, // contnet we got race / gender / age / etc.
+		filter: filter
 	});
 
 	const matchesWithScores = results.matches.map((match) => ({
@@ -49,15 +73,29 @@ export async function searchClinicalNotes(
 		(match) => match?.score && match.score > 0.3,
 	);
 
-	const docs: string[] = filteredMatches.map(
-		(match) =>
-			`note: ${match.metadata?.content} \n\n metadata: ${JSON.stringify(match.metadata)}`,
-	);
+	// Removed second copy of content inside metadata as it was making the
+	// query+document pair supported by pinecone rerank past its 1024 tokens limit.
+	const docs: string[] = filteredMatches.map((match) => {
+		const { content, ...meta } = match.metadata ?? {};
+
+		return `note: ${content}\n\nmetadata: ${JSON.stringify(meta)}`;
+	});
+
+	if (docs.length === 0) {
+		console.log(
+			results.matches.length === 0
+				? `No notes matched filter: ${JSON.stringify(filter)}`
+				: `All ${results.matches.length} matches scored below 0.3`,
+		);
+		
+		// No matching clinical notes were found.
+		return '-1';
+	}
 
 	const reranked = await pinecone.inference.rerank({
 		model: 'bge-reranker-v2-m3',
 		query: query, //text
-		documents: docs, //text
+		documents: docs, //text,  array of strings
 		topN: 5,
 	});
 
