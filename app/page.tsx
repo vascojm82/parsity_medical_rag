@@ -13,15 +13,31 @@ const SchedulingActionSchema = z.object({
 
 type SchedulingAction = z.infer<typeof SchedulingActionSchema>;
 
+const CancellationActionSchema = z.object({
+	bookingId: z.string().min(1),
+	patientName: z.string().min(1),
+	date: z.string(),
+	time: z.string(),
+});
+
+type CancellationAction = z.infer<typeof CancellationActionSchema>;
+
 const ChatResponseSchema = z.object({
 	message: z.string(),
 	schedulingAction: SchedulingActionSchema.nullish(),
+	cancellationAction: CancellationActionSchema.nullish(),
 });
 
-interface Message {
+type CancellationState = {
+	action: CancellationAction;
+	isSubmitting: boolean;
+	error?: string;
+};
+
+type Message = {
 	role: 'user' | 'assistant';
 	content: string;
-}
+};
 
 interface SchedulingState {
 	action: SchedulingAction;
@@ -45,6 +61,9 @@ export default function Home() {
 	const [messages, setMessages] = useState<Message[]>([]);
 	const [isLoading, setIsLoading] = useState(false);
 	const [scheduling, setScheduling] = useState<SchedulingState | null>(null);
+	const [cancellation, setCancellation] = useState<CancellationState | null>(
+		null,
+	);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 
 	const scrollToBottom = () => {
@@ -53,7 +72,7 @@ export default function Home() {
 
 	useEffect(() => {
 		scrollToBottom();
-	}, [messages, scheduling, isLoading]);
+	}, [messages, scheduling, cancellation, isLoading]);
 
 	const sendQuery = async (userMessage: string) => {
 		if (!userMessage.trim() || isLoading) return;
@@ -65,6 +84,7 @@ export default function Home() {
 		]);
 		setIsLoading(true);
 		setScheduling(null);
+		setCancellation(null);
 
 		try {
 			const response = await fetch('/api/chat', {
@@ -78,9 +98,8 @@ export default function Home() {
 
 			if (!response.ok) throw new Error('Failed to get response');
 
-			const { message, schedulingAction } = ChatResponseSchema.parse(
-				await response.json(),
-			);
+			const { message, schedulingAction, cancellationAction } =
+				ChatResponseSchema.parse(await response.json());
 			setMessages((prev) => [
 				...prev,
 				{ role: 'assistant', content: message },
@@ -93,6 +112,10 @@ export default function Home() {
 					time: schedulingAction.time,
 					isSubmitting: false,
 				});
+			}
+
+			if (cancellationAction) {
+				setCancellation({ action: cancellationAction, isSubmitting: false });
 			}
 		} catch (error) {
 			console.error('Error:', error);
@@ -171,6 +194,46 @@ export default function Home() {
 						}
 					: null,
 			);
+		}
+	};
+
+	const handleConfirmCancellation = async () => {
+		if (!cancellation || cancellation.isSubmitting) return;
+
+		const { action } = cancellation;
+		setCancellation({ ...cancellation, isSubmitting: true, error: undefined });
+
+		try {
+			const response = await fetch('/api/schedule/cancel', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({ bookingId: action.bookingId }),
+			});
+
+			if (!response.ok) {
+				const { error } = await response.json();
+				setCancellation({
+					action,
+					isSubmitting: false,
+					error: error || 'Failed to cancel appointment',
+				});
+				return;
+			}
+
+			setCancellation(null);
+			setMessages((prev) => [
+				...prev,
+				{
+					role: 'assistant',
+					content: `Appointment for **${action.patientName}** on ${action.date} at ${action.time} has been cancelled.`,
+				},
+			]);
+		} catch {
+			setCancellation({
+				action,
+				isSubmitting: false,
+				error: 'Failed to cancel appointment',
+			});
 		}
 	};
 
@@ -391,6 +454,50 @@ export default function Home() {
 											'Confirm Appointment'
 										)}
 									</button>
+								</div>
+							</div>
+						)}
+
+						{/* Cancellation Card */}
+						{cancellation && (
+							<div className='flex justify-start'>
+								<div className='max-w-[80%] rounded-lg px-4 py-4 bg-copilot-sidebar border border-red-400'>
+									<p className='font-semibold text-copilot-text mb-2'>
+										Cancel Appointment
+									</p>
+									<p className='text-sm text-copilot-muted mb-4'>
+										Are you sure you want to cancel the appointment for{' '}
+										<strong className='text-copilot-text'>
+											{cancellation.action.patientName}
+										</strong>{' '}
+										on {cancellation.action.date} at{' '}
+										{cancellation.action.time}?
+									</p>
+
+									{cancellation.error && (
+										<p className='text-sm text-red-400 mb-3'>
+											{cancellation.error}
+										</p>
+									)}
+
+									<div className='flex gap-3'>
+										<button
+											onClick={handleConfirmCancellation}
+											disabled={cancellation.isSubmitting}
+											className='flex-1 px-4 py-2 bg-red-500 text-white rounded-lg hover:bg-red-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium'
+										>
+											{cancellation.isSubmitting
+												? 'Cancelling...'
+												: 'Cancel appointment'}
+										</button>
+										<button
+											onClick={() => setCancellation(null)}
+											disabled={cancellation.isSubmitting}
+											className='flex-1 px-4 py-2 border border-copilot-border text-copilot-text rounded-lg hover:border-copilot-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium'
+										>
+											Keep appointment
+										</button>
+									</div>
 								</div>
 							</div>
 						)}

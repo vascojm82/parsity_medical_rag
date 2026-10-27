@@ -18,6 +18,23 @@
 
 const CAL_API_BASE = 'https://api.cal.com/v1';
 
+// The clinic's (and Cal.com profile's) timezone. Times from the UI are wall-clock here.
+const TIME_ZONE = 'America/New_York';
+
+/**
+ * '2026-10-30T15:00:00' (wall-clock in timeZone) -> '2026-10-30T19:00:00.000Z'.
+ * Strings that already carry a timezone (Z or ±HH:MM) are passed through as UTC.
+ * Without this, Cal.com reads a timezone-less time as UTC and books 4–5 hours early.
+ */
+function toUtcIso(local: string, timeZone: string): string {
+  if (/(Z|[+-]\d{2}:\d{2})$/.test(local)) return new Date(local).toISOString();
+
+  const asUtc = new Date(`${local}Z`);
+  const inZone = new Date(asUtc.toLocaleString('en-US', { timeZone }));
+  const inUtc = new Date(asUtc.toLocaleString('en-US', { timeZone: 'UTC' }));
+  return new Date(asUtc.getTime() + (inUtc.getTime() - inZone.getTime())).toISOString();
+}
+
 export interface ScheduleRequest {
   patientName: string;
   dateTime: string; // ISO 8601 format
@@ -65,13 +82,104 @@ export async function scheduleAppointment(
   }
 
   // TODO: Make the API call to Cal.com
-  // const apiKey = process.env.CAL_API_KEY;
-  // const eventTypeId = parseInt(process.env.CAL_EVENT_TYPE_ID || '0', 10);
+  const apiKey = process.env.CAL_API_KEY;
+  const eventTypeId = parseInt(process.env.CAL_EVENT_TYPE_ID || '0', 10);
+
+  const res = await fetch("https://api.cal.com/v2/bookings",
+  {
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'cal-api-version': '2024-08-13',
+        'Content-Type': 'application/json',
+      },
+      method: "POST",
+      body: JSON.stringify({
+        "eventTypeId": eventTypeId,
+        "start": toUtcIso(request.dateTime, TIME_ZONE),
+        "attendee": {
+          "name": request.patientName,
+          "email": request.patientEmail ?? 'miguel_vasconce@hotmail.com',
+          "timeZone": TIME_ZONE,
+          "language": "en"
+        },
+        "location": {
+          "type": "phone"
+        },
+        "metadata": {
+        }
+      })
+  });
+
+  const response = await res.json();
+
+  console.log('response: ', response);
+
+  if (!res.ok) {
+    return {
+      success: false,
+      error: response.error.message || `Cal.com returned ${res.status}`,
+    };
+  }
 
   return {
-    success: false,
-    error: 'Not implemented - your turn!',
+    success: true,
+    bookingId: response.data.uid,
   };
+}
+
+export type UpcomingBooking = {
+  uid: string;
+  start: string; // ISO from Cal.com (UTC)
+  date: string; // YYYY-MM-DD in TIME_ZONE
+  time: string; // HH:MM (24h) in TIME_ZONE
+};
+
+// Cal.com returns UTC; the chat and the user speak New York wall-clock time.
+function toLocalDateTime(iso: string): { date: string; time: string } {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(new Date(iso));
+  const get = (type: string) => parts.find((p) => p.type === type)?.value;
+  return {
+    date: `${get('year')}-${get('month')}-${get('day')}`,
+    time: `${get('hour')}:${get('minute')}`,
+  };
+}
+
+/**
+ * Upcoming (not cancelled) bookings whose attendee name contains patientName.
+ * Cal.com is the source of truth, so a cancelled booking never shows up here.
+ */
+export async function findUpcomingBookings(patientName: string): Promise<UpcomingBooking[]> {
+  if (!isCalConfigured()) {
+    throw new Error('Cal.com is not configured. Set CAL_API_KEY and CAL_EVENT_TYPE_ID.');
+  }
+
+  const res = await fetch('https://api.cal.com/v2/bookings?status=upcoming', {
+    headers: {
+      Authorization: `Bearer ${process.env.CAL_API_KEY}`,
+      'cal-api-version': '2024-08-13',
+    },
+  });
+
+  const response = await res.json();
+
+  if (!res.ok || response.status !== 'success') {
+    throw new Error(response.error?.message || `Cal.com returned ${res.status}`);
+  }
+
+  const name = patientName.toLowerCase();
+
+  return (response.data as { uid: string; start: string; attendees?: { name: string }[] }[])
+    .filter((b) => b.attendees?.some((a) => a.name.toLowerCase().includes(name)))
+    .map((b) => ({ uid: b.uid, start: b.start, ...toLocalDateTime(b.start) }))
+    .sort((a, b) => a.start.localeCompare(b.start));
 }
 
 /**
@@ -80,10 +188,38 @@ export async function scheduleAppointment(
  * TODO (Extension): Implement appointment cancellation
  */
 export async function cancelAppointment(bookingId: string): Promise<ScheduleResult> {
-  // TODO: Implement cancellation via Cal.com API
+  if (!isCalConfigured()) {
+    return {
+      success: false,
+      error: 'Cal.com is not configured. Set CAL_API_KEY and CAL_EVENT_TYPE_ID.',
+    };
+  }
+
+  // v2 cancels by the booking's uid; a host cancellation requires a reason
+  const res = await fetch(`https://api.cal.com/v2/bookings/${encodeURIComponent(bookingId)}/cancel`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.CAL_API_KEY}`,
+      'cal-api-version': '2024-08-13',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      cancellationReason: 'Cancelled by clinic staff',
+    }),
+  });
+
+  const response = await res.json();
+
+  if (!res.ok || response.status !== 'success') {
+    return {
+      success: false,
+      error: response.error?.message || `Cal.com returned ${res.status}`,
+    };
+  }
+
   return {
-    success: false,
-    error: 'Not implemented',
+    success: true,
+    bookingId,
   };
 }
 
