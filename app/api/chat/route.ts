@@ -183,11 +183,6 @@ const selectorAgentSchema = z.object({
 
 const fewShotExamples = [
 	{
-		query: 'What can you tell me about patient John Doe?',
-		actions: ['vector_search'],
-		reason: 'The query is a simple patient lookup, so we can use vector search.',
-	},
-	{
 		query: 'What is the capital of Germany',
 		actions: ['reject'],
 		reason: 'Not a medical question.',
@@ -198,7 +193,17 @@ const fewShotExamples = [
 		reason: 'We NEVER give medical advice.',
 	},
 	{
+		query: 'What medicine should I take for shortness of breath?',
+		actions: ['reject'],
+		reason: 'We NEVER give medical advice.',
+	},
+	{
 		query: 'Schedule an appointment for patient John Doe on October 25th, 2026 at 10:00 AM',
+		actions: ['schedule_appointment'],
+		reason: 'The query is a simple appointment scheduling request, so we can use the schedule_appointment action.',
+	},
+	{
+		query: 'Schedule appointment for Joe Schmoe 10/26/2026 1PM',
 		actions: ['schedule_appointment'],
 		reason: 'The query is a simple appointment scheduling request, so we can use the schedule_appointment action.',
 	},
@@ -228,7 +233,27 @@ const fewShotExamples = [
 		reason: 'The query asks for a specific number of patients with a condition, in this case asthma.',
 	},
 	{
+		query: 'How many male patients patients with hypertension?',
+		actions: ['sql_search'],
+		reason: 'The query asks for a specific number of patients with a condition, in this case asthma.',
+	},
+	{
+		query: 'What can you tell me about patient John Doe?',
+		actions: ['vector_search'],
+		reason: 'The query is a simple patient lookup, so we can use vector search.',
+	},
+	{
+		query: 'What do the notes say about asthma?',
+		actions: ['vector_search'],
+		reason: 'The query is a simple patient lookup, so we can use vector search.',
+	},
+	{
 		query: 'What can you tell me about smokers in this age group (40+) that are Hispanic?',
+		actions: ['sql_search', 'vector_search'],
+		reason: 'The query is a simple patient lookup, so we can use sql search and vector search.',
+	},
+	{
+		query: 'What can you tell me about patients with cancer in this age group (50+) that are black?',
 		actions: ['sql_search', 'vector_search'],
 		reason: 'The query is a simple patient lookup, so we can use sql search and vector search.',
 	},
