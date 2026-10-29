@@ -226,15 +226,45 @@ export async function cancelAppointment(bookingId: string): Promise<ScheduleResu
 /**
  * Reschedule an appointment
  *
- * TODO (Extension): Implement appointment rescheduling
+ * v2 moves the booking to a new start time. Cal.com creates a NEW booking (new uid)
+ * and marks the old one as rescheduled, so the returned bookingId is the new uid.
  */
 export async function rescheduleAppointment(
   bookingId: string,
   newDateTime: string
 ): Promise<ScheduleResult> {
-  // TODO: Implement rescheduling via Cal.com API
+  if (!isCalConfigured()) {
+    return {
+      success: false,
+      error: 'Cal.com is not configured. Set CAL_API_KEY and CAL_EVENT_TYPE_ID.',
+    };
+  }
+
+  const res = await fetch(`https://api.cal.com/v2/bookings/${encodeURIComponent(bookingId)}/reschedule`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${process.env.CAL_API_KEY}`,
+      'cal-api-version': '2024-08-13',
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      // same wall-clock -> UTC conversion as booking, or the new slot lands 4–5 hours early
+      start: toUtcIso(newDateTime, TIME_ZONE),
+      reschedulingReason: 'Rescheduled by clinic staff',
+    }),
+  });
+
+  const response = await res.json();
+
+  if (!res.ok || response.status !== 'success') {
+    return {
+      success: false,
+      error: response.error?.message || `Cal.com returned ${res.status}`,
+    };
+  }
+
   return {
-    success: false,
-    error: 'Not implemented',
+    success: true,
+    bookingId: response.data.uid,
   };
 }

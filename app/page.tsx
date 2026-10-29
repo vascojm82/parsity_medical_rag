@@ -22,14 +22,31 @@ const CancellationActionSchema = z.object({
 
 type CancellationAction = z.infer<typeof CancellationActionSchema>;
 
+const RescheduleActionSchema = CancellationActionSchema.extend({
+	newDate: z.iso.date(),
+	newTime: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
+});
+
+type RescheduleAction = z.infer<typeof RescheduleActionSchema>;
+
 const ChatResponseSchema = z.object({
 	message: z.string(),
 	schedulingAction: SchedulingActionSchema.nullish(),
 	cancellationAction: CancellationActionSchema.nullish(),
+	rescheduleAction: RescheduleActionSchema.nullish(),
 });
 
 type CancellationState = {
 	action: CancellationAction;
+	isSubmitting: boolean;
+	error?: string;
+};
+
+// newDate/newTime start from the agent's proposal but stay editable in the card
+type RescheduleState = {
+	action: RescheduleAction;
+	newDate: string;
+	newTime: string;
 	isSubmitting: boolean;
 	error?: string;
 };
@@ -64,6 +81,7 @@ export default function Home() {
 	const [cancellation, setCancellation] = useState<CancellationState | null>(
 		null,
 	);
+	const [reschedule, setReschedule] = useState<RescheduleState | null>(null);
 	const messagesEndRef = useRef<HTMLDivElement>(null);
 
 	const scrollToBottom = () => {
@@ -72,7 +90,7 @@ export default function Home() {
 
 	useEffect(() => {
 		scrollToBottom();
-	}, [messages, scheduling, cancellation, isLoading]);
+	}, [messages, scheduling, cancellation, reschedule, isLoading]);
 
 	const sendQuery = async (userMessage: string) => {
 		if (!userMessage.trim() || isLoading) return;
@@ -85,6 +103,7 @@ export default function Home() {
 		setIsLoading(true);
 		setScheduling(null);
 		setCancellation(null);
+		setReschedule(null);
 
 		try {
 			const response = await fetch('/api/chat', {
@@ -98,7 +117,7 @@ export default function Home() {
 
 			if (!response.ok) throw new Error('Failed to get response');
 
-			const { message, schedulingAction, cancellationAction } =
+			const { message, schedulingAction, cancellationAction, rescheduleAction } =
 				ChatResponseSchema.parse(await response.json());
 			setMessages((prev) => [
 				...prev,
@@ -116,6 +135,15 @@ export default function Home() {
 
 			if (cancellationAction) {
 				setCancellation({ action: cancellationAction, isSubmitting: false });
+			}
+
+			if (rescheduleAction) {
+				setReschedule({
+					action: rescheduleAction,
+					newDate: rescheduleAction.newDate,
+					newTime: rescheduleAction.newTime,
+					isSubmitting: false,
+				});
 			}
 		} catch (error) {
 			console.error('Error:', error);
@@ -233,6 +261,49 @@ export default function Home() {
 				action,
 				isSubmitting: false,
 				error: 'Failed to cancel appointment',
+			});
+		}
+	};
+
+	const handleConfirmReschedule = async () => {
+		if (!reschedule || reschedule.isSubmitting) return;
+
+		const { action, newDate, newTime } = reschedule;
+		setReschedule({ ...reschedule, isSubmitting: true, error: undefined });
+
+		try {
+			const response = await fetch('/api/schedule/reschedule', {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: JSON.stringify({
+					bookingId: action.bookingId,
+					dateTime: `${newDate}T${newTime}:00`, // the server converts to UTC
+				}),
+			});
+
+			if (!response.ok) {
+				const { error } = await response.json();
+				setReschedule({
+					...reschedule,
+					isSubmitting: false,
+					error: error || 'Failed to reschedule appointment',
+				});
+				return;
+			}
+
+			setReschedule(null);
+			setMessages((prev) => [
+				...prev,
+				{
+					role: 'assistant',
+					content: `Appointment for **${action.patientName}** moved from ${action.date} at ${action.time} to ${newDate} at ${newTime}.`,
+				},
+			]);
+		} catch {
+			setReschedule({
+				...reschedule,
+				isSubmitting: false,
+				error: 'Failed to reschedule appointment',
 			});
 		}
 	};
@@ -496,6 +567,90 @@ export default function Home() {
 											className='flex-1 px-4 py-2 border border-copilot-border text-copilot-text rounded-lg hover:border-copilot-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium'
 										>
 											Keep appointment
+										</button>
+									</div>
+								</div>
+							</div>
+						)}
+
+						{/* Reschedule Card */}
+						{reschedule && (
+							<div className='flex justify-start'>
+								<div className='max-w-[80%] rounded-lg px-4 py-4 bg-copilot-sidebar border border-copilot-accent'>
+									<p className='font-semibold text-copilot-text mb-2'>
+										Reschedule Appointment
+									</p>
+									<p className='text-sm text-copilot-muted mb-3'>
+										<strong className='text-copilot-text'>
+											{reschedule.action.patientName}
+										</strong>{' '}
+										— currently {reschedule.action.date} at{' '}
+										{reschedule.action.time}
+									</p>
+
+									<div className='grid grid-cols-2 gap-3 mb-4'>
+										<div>
+											<label className='block text-xs text-copilot-muted mb-1'>
+												New date
+											</label>
+											<input
+												type='date'
+												value={reschedule.newDate}
+												onChange={(e) =>
+													setReschedule((prev) =>
+														prev
+															? { ...prev, newDate: e.target.value }
+															: null,
+													)
+												}
+												className='w-full px-3 py-2 bg-copilot-input border border-copilot-border rounded text-copilot-text text-sm'
+											/>
+										</div>
+										<div>
+											<label className='block text-xs text-copilot-muted mb-1'>
+												New time
+											</label>
+											<input
+												type='time'
+												value={reschedule.newTime}
+												onChange={(e) =>
+													setReschedule((prev) =>
+														prev
+															? { ...prev, newTime: e.target.value }
+															: null,
+													)
+												}
+												className='w-full px-3 py-2 bg-copilot-input border border-copilot-border rounded text-copilot-text text-sm'
+											/>
+										</div>
+									</div>
+
+									{reschedule.error && (
+										<p className='text-sm text-red-400 mb-3'>
+											{reschedule.error}
+										</p>
+									)}
+
+									<div className='flex gap-3'>
+										<button
+											onClick={handleConfirmReschedule}
+											disabled={
+												reschedule.isSubmitting ||
+												!reschedule.newDate ||
+												!reschedule.newTime
+											}
+											className='flex-1 px-4 py-2 bg-copilot-accent text-white rounded-lg hover:bg-blue-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium'
+										>
+											{reschedule.isSubmitting
+												? 'Rescheduling...'
+												: 'Confirm new time'}
+										</button>
+										<button
+											onClick={() => setReschedule(null)}
+											disabled={reschedule.isSubmitting}
+											className='flex-1 px-4 py-2 border border-copilot-border text-copilot-text rounded-lg hover:border-copilot-accent disabled:opacity-50 disabled:cursor-not-allowed transition-colors text-sm font-medium'
+										>
+											Keep current time
 										</button>
 									</div>
 								</div>
